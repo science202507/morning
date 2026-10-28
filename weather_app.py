@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import datetime
 import math
+from streamlit_js_eval import get_geolocation
 
 # 1. 페이지 설정 및 폰트 스타일 (설계안 반영: 24px 굵게)
 st.set_page_config(page_title="날씨 스포일러", layout="centered")
@@ -21,19 +22,30 @@ SKY_TEXT = {1: "☀️ 맑음", 3: "⛅ 구름 많음", 4: "☁️ 흐림"}
 PTY_TEXT = {1: "🌧️ 비", 2: "🌨️ 비 또는 눈", 3: "❄️ 눈", 4: "🌦️ 소나기"}
 
 # --- [기능] 위치 추적 및 좌표 변환 ---
-@st.cache_data
-def get_user_location():
+DEFAULT_LOCATION = (35.843, 127.123, "전주시 덕진구")
+
+@st.cache_data(ttl=86400)
+def get_town_name(lat, lon):
+    # 좌표 → "전주시 덕진구 덕진동2가" 같은 한글 주소
     try:
-        loc_res = requests.get('http://ip-api.com/json', timeout=5).json()
-        if loc_res['status'] == 'success':
-            lat, lon = loc_res['lat'], loc_res['lon']
-            addr_url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&addressdetails=1"
-            addr_res = requests.get(addr_url, headers={'User-Agent': 'WeatherSpoiler/1.0'}).json()
-            addr = addr_res.get('address', {})
-            town = addr.get('city_district') or addr.get('suburb') or addr.get('village') or addr.get('town') or "전주시 덕진구"
-            return lat, lon, town
-    except: pass
-    return 35.843, 127.123, "전주시 덕진구"
+        addr_url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=16&addressdetails=1&accept-language=ko"
+        addr = requests.get(addr_url, headers={'User-Agent': 'WeatherSpoiler/1.0'}, timeout=5).json().get('address', {})
+        parts = [addr.get('city') or addr.get('county'), addr.get('borough'),
+                 addr.get('quarter') or addr.get('suburb') or addr.get('town') or addr.get('village')]
+        return " ".join(p for p in parts if p) or "현재 위치"
+    except: return "현재 위치"
+
+def get_user_location():
+    # 서버 IP가 아니라 사용자 브라우저(휴대폰 GPS)의 위치를 사용
+    geo = get_geolocation()
+    if geo and 'coords' in geo:
+        lat, lon = round(geo['coords']['latitude'], 3), round(geo['coords']['longitude'], 3)
+        if 33 <= lat <= 39 and 124 <= lon <= 132:
+            return lat, lon, get_town_name(lat, lon), "GPS 기반"
+        return *DEFAULT_LOCATION, "기본 위치 · 기상청 예보는 국내 위치만 지원해요"
+    if geo and 'error' in geo:
+        return *DEFAULT_LOCATION, "기본 위치 · 위치 권한을 허용하면 내 동네 날씨가 나와요"
+    return *DEFAULT_LOCATION, "기본 위치 · 내 위치를 확인하는 중이에요"
 
 def convert_to_grid(lat, lon):
     RE, GRID, SLAT1, SLAT2, OLON, OLAT, XO, YO = 6371.00877, 5.0, 30.0, 60.0, 126.0, 38.0, 43, 136
@@ -211,8 +223,8 @@ def commute_advice(am, day, tmn, tmx):
 
 # --- [UI] ---
 st.title("☀️ 날씨 스포일러")
-lat, lon, town_name = get_user_location()
-st.caption(f"📍 위치: {town_name} (IP 기반 자동 설정)")
+lat, lon, town_name, loc_note = get_user_location()
+st.caption(f"📍 위치: {town_name} ({loc_note})")
 
 now = datetime.datetime.now(KST)
 base_date, base_time = get_base_datetime(now)
